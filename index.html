@@ -184,6 +184,7 @@
 </section>
 
 <div id="modalRoot"></div>
+<div id="toastRoot" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none"></div>
 
 <script>
 /* ============================================================
@@ -278,7 +279,80 @@ function loadSongs(){
   if (!raw) return [];
   try { return JSON.parse(raw); } catch(e){ return []; }
 }
-function saveSongs(songs){ localStorage.setItem(STORAGE_KEY, JSON.stringify(songs)); }
+function saveSongs(songs){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(songs));
+  scheduleCloudPush();
+}
+
+/* ============================================================
+   GUARDADO EN LA NUBE (repositorio de GitHub)
+   ============================================================
+   localStorage sigue siendo la copia local/offline de cada dispositivo, pero el
+   repositorio de GitHub es la fuente de la verdad compartida: cualquiera que abra
+   el link LEE ese archivo (sin necesitar llave), y solo quien tenga configurada la
+   llave de acceso puede ESCRIBIR cambios que luego todos ven. Así se deja de
+   depender del Google Sheet para el día a día — ese fue solo el insumo inicial. */
+const GITHUB_OWNER = 'markfiorente';
+const GITHUB_REPO = 'mark-chords';
+const GITHUB_BRANCH = 'main';
+const GITHUB_DATA_PATH = 'data/songs.json';
+const GITHUB_TOKEN_KEY = 'mark_chords_gh_token';
+
+function getGithubToken(){ return localStorage.getItem(GITHUB_TOKEN_KEY) || ''; }
+function setGithubToken(token){
+  if (token) localStorage.setItem(GITHUB_TOKEN_KEY, token);
+  else localStorage.removeItem(GITHUB_TOKEN_KEY);
+}
+
+async function loadSongsFromCloud(){
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${GITHUB_DATA_PATH}?_=${Date.now()}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data) ? data : null;
+  } catch(e){ return null; }
+}
+
+let cloudPushTimer = null;
+function scheduleCloudPush(){
+  if (!getGithubToken()) return;
+  clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(() => {
+    pushSongsToCloud()
+      .then(() => showToast('Guardado en la nube ✓', 'success'))
+      .catch(err => showToast('No se guardó en la nube: ' + err.message, 'error'));
+  }, 1500);
+}
+
+async function pushSongsToCloud(){
+  const token = getGithubToken();
+  if (!token) throw new Error('No hay llave de acceso configurada.');
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_DATA_PATH}`;
+  let sha = null;
+  const getRes = await fetch(`${apiUrl}?ref=${GITHUB_BRANCH}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+  });
+  if (getRes.ok){
+    sha = (await getRes.json()).sha;
+  } else if (getRes.status !== 404){
+    throw new Error(`código ${getRes.status} al verificar el archivo. Revisa que la llave tenga permiso de escritura sobre este repositorio.`);
+  }
+  const content = btoa(unescape(encodeURIComponent(JSON.stringify(state.songs, null, 2))));
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: `Actualizar repertorio (${new Date().toLocaleString('es-CO')})`,
+      content,
+      branch: GITHUB_BRANCH,
+      ...(sha ? { sha } : {}),
+    }),
+  });
+  if (!putRes.ok){
+    const errBody = await putRes.json().catch(() => ({}));
+    throw new Error(errBody.message || `código ${putRes.status}`);
+  }
+}
 
 function slugify(s){
   return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
@@ -765,17 +839,83 @@ function openModal(innerHtml, opts){
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML = ''; }
 
+function showToast(message, type){
+  const root = document.getElementById('toastRoot');
+  const el = document.createElement('div');
+  const colors = type === 'error'
+    ? 'bg-red-950/95 border-red-800 text-red-200'
+    : type === 'success'
+      ? 'bg-neutral-900/95 border-green-700 text-green-300'
+      : 'bg-neutral-900/95 border-neutral-700 text-neutral-200';
+  el.className = `fade-in px-4 py-2 rounded-lg border text-sm shadow-lg ${colors}`;
+  el.textContent = message;
+  root.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = 'opacity .3s';
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 300);
+  }, 3000);
+}
+
 function openMoreModal(){
+  const hasToken = !!getGithubToken();
   openModal(`
     <div class="p-5">
       <h2 class="text-lg font-bold mb-4 text-white">Más opciones</h2>
       <div class="space-y-2">
+        <button onclick="closeModal(); openCloudSettingsModal();" class="w-full text-left px-4 py-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 flex items-center gap-3">
+          <i class="fa-solid fa-cloud w-4 ${hasToken ? 'text-green-400' : 'text-orange-400'}"></i>
+          <span class="flex-1">Guardado en la nube</span>
+          <span class="text-[10px] font-bold uppercase ${hasToken ? 'text-green-400' : 'text-neutral-500'}">${hasToken ? 'Activo' : 'Sin configurar'}</span>
+        </button>
         <button onclick="closeModal(); exportBackup();" class="w-full text-left px-4 py-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 flex items-center gap-3"><i class="fa-solid fa-download w-4 text-orange-400"></i> Exportar backup (.json)</button>
         <button onclick="closeModal(); openImportBackupModal();" class="w-full text-left px-4 py-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 flex items-center gap-3"><i class="fa-solid fa-upload w-4 text-orange-400"></i> Restaurar backup (.json)</button>
       </div>
       <button onclick="closeModal()" class="w-full mt-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm">Cerrar</button>
     </div>
   `);
+}
+
+function openCloudSettingsModal(){
+  const hasToken = !!getGithubToken();
+  openModal(`
+    <div class="p-5">
+      <h2 class="text-lg font-bold mb-2 text-white">Guardado en la nube</h2>
+      <p class="text-sm text-neutral-500 mb-3">Con esto configurado, cada cambio que hagas (cifrados, canciones, favoritos) se guarda solo en el repositorio de GitHub y aparece para cualquiera que abra el link — sin que tengas que tocar el Google Sheet nunca más.</p>
+      <ol class="text-xs text-neutral-400 list-decimal list-inside space-y-1.5 mb-4">
+        <li>Ve a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" class="text-orange-400 underline">github.com/settings/personal-access-tokens/new</a></li>
+        <li>En "Repository access" elige "Only select repositories" → selecciona <b class="text-neutral-200">mark-chords</b></li>
+        <li>En "Permissions → Repository permissions" busca <b class="text-neutral-200">Contents</b> y ponlo en <b class="text-neutral-200">Read and write</b></li>
+        <li>Dale "Generate token" y copia la llave (empieza con "github_pat_...")</li>
+      </ol>
+      <label class="text-xs text-neutral-500">Llave de acceso</label>
+      <input id="ghTokenInput" type="password" value="${hasToken ? '' : ''}" placeholder="${hasToken ? 'Ya hay una llave guardada en este dispositivo' : 'github_pat_...'}" class="w-full mt-1 bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm mono focus:outline-none focus:ring-1 focus:ring-orange-500/60">
+      <div id="ghTokenStatus" class="text-sm mt-3"></div>
+      <div class="flex gap-2 mt-4">
+        <button onclick="closeModal()" class="flex-1 py-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold">Cerrar</button>
+        <button id="btnSaveToken" onclick="handleSaveGithubToken()" class="flex-1 py-2.5 rounded-lg bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold">Guardar y probar</button>
+      </div>
+      ${hasToken ? `<button onclick="setGithubToken(''); closeModal(); showToast('Llave eliminada de este dispositivo', 'info');" class="w-full mt-2 py-2 rounded-lg bg-neutral-800/50 hover:bg-red-900/40 text-red-400 text-xs">Quitar llave de este dispositivo</button>` : ''}
+    </div>
+  `, { wide:true });
+}
+
+async function handleSaveGithubToken(){
+  const input = document.getElementById('ghTokenInput');
+  const statusEl = document.getElementById('ghTokenStatus');
+  const btn = document.getElementById('btnSaveToken');
+  const val = input.value.trim();
+  if (!val){ statusEl.innerHTML = '<span class="text-red-400">Pega una llave válida.</span>'; return; }
+  btn.disabled = true;
+  setGithubToken(val);
+  statusEl.innerHTML = '<span class="text-neutral-500"><i class="fa-solid fa-spinner fa-spin"></i> Probando...</span>';
+  try {
+    await pushSongsToCloud();
+    statusEl.innerHTML = '<span class="text-green-400"><i class="fa-solid fa-check"></i> ¡Listo! Ya está guardando en la nube.</span>';
+  } catch(err){
+    statusEl.innerHTML = `<span class="text-red-400">${escapeHtml(err.message)}</span>`;
+    btn.disabled = false;
+  }
 }
 
 /* ---------- Alta / edición manual ---------- */
@@ -1263,26 +1403,26 @@ function openImportBackupModal(){
 }
 
 /* ============================================================
-   AUTO-SYNC AL ABRIR
+   CARGA INICIAL
    ============================================================ */
-// Cada vez que se abre la app, se actualiza sola contra el Google Sheet oficial en
-// segundo plano — así cualquiera que la abra ve el repertorio al día sin tener que
-// acordarse de sincronizar ni pasar backups a mano. Usa mergeImportedSongs (nunca
-// reemplaza todo), así que nunca borra favoritos ni cifrados editados a mano; y si
-// no hay internet o el sheet no responde, falla en silencio y se sigue viendo el
-// repertorio que ya estaba guardado en ese dispositivo, sin interrumpir a nadie.
-async function autoSyncOnLoad(){
+// Al abrir, se lee el repertorio directo del repositorio de GitHub (la fuente de la
+// verdad compartida por todos) — sin login, sin depender del Google Sheet. Si no hay
+// internet o el archivo aún no existe, se sigue viendo lo que ya había guardado
+// localmente en este dispositivo (cargado de entrada en state.songs), sin bloquear
+// ni interrumpir a nadie.
+async function loadInitialData(){
   const icon = document.getElementById('syncIcon');
   if (icon) icon.classList.add('fa-spin');
   try {
-    const { rows, getLink } = await syncFromGoogleSheet(OFFICIAL_SHEET_URL);
-    const { songs } = importRows(rows, getLink);
-    await enrichWithSheetMusicChords(songs);
-    mergeImportedSongs(songs);
-    renderLibrary();
-    renderMain();
+    const cloud = await loadSongsFromCloud();
+    if (cloud){
+      state.songs = cloud;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cloud)); // cache local; no dispara push de vuelta
+      renderLibrary();
+      renderMain();
+    }
   } catch(err){
-    console.warn('Auto-sync al abrir falló (se sigue mostrando el repertorio local):', err.message);
+    console.warn('No se pudo cargar el repertorio de la nube (se sigue mostrando el local):', err.message);
   } finally {
     if (icon) icon.classList.remove('fa-spin');
   }
@@ -1294,7 +1434,7 @@ async function autoSyncOnLoad(){
 applyResponsiveLayout();
 renderLibrary();
 renderMain();
-autoSyncOnLoad();
+loadInitialData();
 </script>
 </body>
 </html>
