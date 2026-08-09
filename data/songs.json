@@ -738,15 +738,15 @@
     "id": "en-espiritu-y-verdad-marco-barrientos",
     "title": "En espíritu y verdad",
     "artist": "Marco Barrientos",
-    "key": "D",
-    "originalKey": "D",
+    "key": "A",
+    "originalKey": "",
     "bpm": null,
     "youtube": "",
     "mp3": "https://drive.google.com/file/d/17OO4eed-usDh7qjDaNi0kR5nIKKsJL2P/view?usp=sharing",
     "sheetMusic": "",
     "sequence": [],
     "annotations": "",
-    "chords": "Tono: \nD\n\nA D F#m D\n\n[Verso]\n            A\n//Es tiempo de\n                  D\nAdorar con pasión\n          F#m\nEs tiempo de\n                  D\nTu justicia fluir//\n\nFluir, fluir\n\n[Coro]\nA\nTe exaltamos Dios\n              D\nEn Espíritu y Verdad\n        F#m            D\nTu eres santo, tu eres digno\n\n[Verso]\n          A\nEs tiempo de\n                  D\nAdorar con pasión\n          F#m\nEs tiempo de\n                  D\nTu justicia fluir\n\nFluir, fluir\n\n[Coro]\n  A\n//Te exaltamos Dios\n               D\nEn Espíritu y Verdad\n        F#m            D\nTu eres santo, tu eres digno//\n\n[Intro]\nA D F#m D\n\n[Coro]\n   A\n///Te exaltamos Dios\n              D\nEn EspÃ­ritu y Verdad\n        F#m            D\nTu eres santo, tu eres digno///\n",
+    "chords": "",
     "favorite": false
   },
   {
@@ -1202,7 +1202,7 @@
   {
     "id": "nueva-cancion-putman",
     "title": "Nueva Cancion",
-    "artist": "BJ Putman",
+    "artist": "Putman",
     "key": "E",
     "originalKey": "E",
     "bpm": null,
