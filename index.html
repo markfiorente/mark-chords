@@ -314,43 +314,80 @@ async function loadSongsFromCloud(){
 }
 
 let cloudPushTimer = null;
+let cloudPushInFlight = false;
+let cloudPushPending = false;
+
 function scheduleCloudPush(){
   if (!getGithubToken()) return;
   clearTimeout(cloudPushTimer);
-  cloudPushTimer = setTimeout(() => {
-    pushSongsToCloud()
-      .then(() => showToast('Guardado en la nube ✓', 'success'))
-      .catch(err => showToast('No se guardó en la nube: ' + err.message, 'error'));
-  }, 1500);
+  cloudPushTimer = setTimeout(runCloudPush, 1500);
+}
+
+// Si ya hay un guardado en curso cuando llega otro cambio, no se lanzan dos PUT en
+// paralelo (eso es lo que causaba el error crudo tipo "Unexpected token... in JSON
+// at position 0" cuando chocaban) — se espera a que termine el actual y luego se
+// vuelve a guardar una sola vez con el estado más reciente.
+async function runCloudPush(){
+  if (cloudPushInFlight){ cloudPushPending = true; return; }
+  cloudPushInFlight = true;
+  try {
+    await pushSongsToCloud();
+    showToast('Guardado en la nube ✓', 'success');
+  } catch(err){
+    showToast('No se guardó en la nube: ' + err.message, 'error');
+  } finally {
+    cloudPushInFlight = false;
+    if (cloudPushPending){ cloudPushPending = false; runCloudPush(); }
+  }
+}
+
+async function safeJson(res){
+  try { return await res.json(); } catch(e){ return null; }
 }
 
 async function pushSongsToCloud(){
   const token = getGithubToken();
   if (!token) throw new Error('No hay llave de acceso configurada.');
   const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_DATA_PATH}`;
-  let sha = null;
-  const getRes = await fetch(`${apiUrl}?ref=${GITHUB_BRANCH}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-  });
-  if (getRes.ok){
-    sha = (await getRes.json()).sha;
-  } else if (getRes.status !== 404){
-    throw new Error(`código ${getRes.status} al verificar el archivo. Revisa que la llave tenga permiso de escritura sobre este repositorio.`);
+
+  async function getSha(){
+    const res = await fetch(`${apiUrl}?ref=${GITHUB_BRANCH}&_=${Date.now()}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (res.ok) return (await safeJson(res))?.sha || null;
+    if (res.status === 404) return null;
+    const body = await safeJson(res);
+    throw new Error(body?.message || `código ${res.status} al verificar el archivo. Revisa que la llave tenga permiso de escritura sobre este repositorio.`);
   }
-  const content = btoa(unescape(encodeURIComponent(JSON.stringify(state.songs, null, 2))));
-  const putRes = await fetch(apiUrl, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: `Actualizar repertorio (${new Date().toLocaleString('es-CO')})`,
-      content,
-      branch: GITHUB_BRANCH,
-      ...(sha ? { sha } : {}),
-    }),
-  });
+
+  async function putContent(sha){
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(state.songs, null, 2))));
+    return fetch(apiUrl, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `Actualizar repertorio (${new Date().toLocaleString('es-CO')})`,
+        content,
+        branch: GITHUB_BRANCH,
+        ...(sha ? { sha } : {}),
+      }),
+    });
+  }
+
+  let sha = await getSha();
+  let putRes = await putContent(sha);
+
+  // 409 = alguien más (u otra pestaña) guardó justo entre el GET y el PUT. Es un
+  // choque benigno y esperable con guardado automático; se reintenta una vez con
+  // el sha fresco antes de darlo por fallido.
+  if (putRes.status === 409){
+    sha = await getSha();
+    putRes = await putContent(sha);
+  }
+
   if (!putRes.ok){
-    const errBody = await putRes.json().catch(() => ({}));
-    throw new Error(errBody.message || `código ${putRes.status}`);
+    const errBody = await safeJson(putRes);
+    throw new Error(errBody?.message || `código ${putRes.status}`);
   }
 }
 
