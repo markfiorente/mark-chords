@@ -24,6 +24,8 @@
   .chart-view .lyric-line{ color:#e5e5e5; white-space:pre-wrap; }
   .chart-view .chord-line{ white-space:pre; }
   .chart-view .section-header{ color:#fb923c; text-transform:uppercase; letter-spacing:.08em; font-weight:800; font-size:.85em; margin:1em 0 .3em; border-bottom:1px solid rgba(249,115,22,.25); padding-bottom:.2em; display:flex; align-items:center; }
+  #view-stage .chart-view .section-header{ cursor:pointer; }
+  #view-stage .chart-view .section-header:active{ opacity:.6; }
   .chart-view .section-header::before{ content:''; display:inline-block; width:.5em; height:.5em; background:#f97316; border-radius:2px; margin-right:.6em; flex-shrink:0; }
   .chart-view .spacer{ height:.6em; }
   #view-stage .chart-view{ font-size:var(--stage-font); }
@@ -50,6 +52,7 @@
     <button id="btnImportExcel" title="Importar Excel" class="h-9 w-9 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 hover:text-orange-400 flex items-center justify-center"><i class="fa-solid fa-file-excel"></i></button>
     <button id="btnAddSong" title="Agregar canción" class="h-9 w-9 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 hover:text-orange-400 flex items-center justify-center"><i class="fa-solid fa-plus"></i></button>
     <button id="btnMore" title="Más opciones" class="h-9 w-9 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 hover:text-orange-400 flex items-center justify-center"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+    <button onclick="openSetlistModal()" title="Setlist de hoy" class="h-9 w-9 sm:w-auto sm:px-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 hover:text-orange-400 text-sm font-semibold flex items-center justify-center gap-2"><i class="fa-solid fa-list-check"></i><span class="hidden sm:inline">Setlist</span></button>
     <button id="btnStageHeader" onclick="enterStageMode()" disabled class="h-9 px-3 sm:px-4 rounded-lg bg-orange-500 hover:bg-orange-400 text-black text-sm font-extrabold flex items-center gap-2 disabled:opacity-30 disabled:pointer-events-none"><i class="fa-solid fa-tv"></i><span class="hidden sm:inline">MODO EN VIVO</span></button>
   </div>
 </header>
@@ -162,16 +165,19 @@
 <!-- ================= STAGE MODE ================= -->
 <section id="view-stage" class="hidden fixed inset-0 z-40 bg-black flex flex-col">
   <div class="flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-black border-b border-neutral-800 shrink-0">
-    <button onclick="exitStageMode()" class="w-9 h-9 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 flex items-center justify-center"><i class="fa-solid fa-xmark"></i></button>
+    <button onclick="exitStageMode()" class="w-9 h-9 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 flex items-center justify-center shrink-0"><i class="fa-solid fa-xmark"></i></button>
+    <button onclick="stagePrev()" title="Canción anterior" class="stage-nav-btn w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 flex items-center justify-center shrink-0"><i class="fa-solid fa-chevron-left text-xs"></i></button>
     <div class="text-center flex-1 min-w-0">
       <div id="sTitle" class="font-bold truncate text-sm sm:text-base"></div>
       <div id="sSubtitle" class="text-[11px] text-neutral-500 truncate"></div>
     </div>
-    <div class="flex items-center gap-1">
+    <button onclick="stageNext()" title="Siguiente canción" class="stage-nav-btn w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 flex items-center justify-center shrink-0"><i class="fa-solid fa-chevron-right text-xs"></i></button>
+    <div class="flex items-center gap-1 shrink-0">
       <button onclick="stageFontStep(-2)" class="w-9 h-9 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 flex items-center justify-center text-xs font-bold">A-</button>
       <button onclick="stageFontStep(2)" class="w-9 h-9 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 flex items-center justify-center text-sm font-bold">A+</button>
     </div>
   </div>
+  <select id="sSectionJump" class="hidden w-full bg-neutral-900 border-b border-neutral-800 text-neutral-300 text-xs px-3 py-1.5 focus:outline-none shrink-0"></select>
   <div id="stageScrollArea" class="flex-1 overflow-y-auto px-4 sm:px-8 py-6">
     <div id="sChart" class="chart-view mono max-w-3xl mx-auto pb-40"></div>
   </div>
@@ -207,8 +213,15 @@ function transposeNote(note, semitones, useFlats){
   return useFlats ? CHROMATIC_FLAT[newIdx] : CHROMATIC_SHARP[newIdx];
 }
 
+// Cifrados pegados de un Google Doc a veces usan los signos musicales Unicode reales
+// (♭ ♯ ♮) en vez de los ASCII "b"/"#" que espera CHORD_TOKEN_REGEX — se normalizan
+// antes de cualquier intento de reconocer/transportar un token.
+function normalizeChordUnicode(s){
+  return String(s).replace(/♭/g, 'b').replace(/♯/g, '#').replace(/♮/g, '');
+}
+
 function transposeChord(token, semitones, targetKey){
-  const m = CHORD_TOKEN_REGEX.exec(token.trim());
+  const m = CHORD_TOKEN_REGEX.exec(normalizeChordUnicode(token.trim()));
   if (!m) return token;
   if (m[1]) return token; // N.C.
   const useFlats = FLAT_KEYS.includes(targetKey);
@@ -233,8 +246,15 @@ function isChordLine(line){
   if (!tokens.length) return false;
   let hasChordOrSymbol = false;
   for (const t of tokens){
-    if (CHORD_TOKEN_REGEX.test(t) || NOTATION_SYMBOL_REGEX.test(t)) hasChordOrSymbol = true;
-    else return false;
+    if (CHORD_TOKEN_REGEX.test(normalizeChordUnicode(t))) { hasChordOrSymbol = true; continue; }
+    if (NOTATION_SYMBOL_REGEX.test(t)){
+      // Un token de solo "." o "%" (sin un símbolo real de partitura) se tolera como
+      // parte de una línea de acordes ya establecida, pero no basta por sí solo para
+      // clasificar la línea como de acordes (evita que una letra "..." se confunda).
+      if (/[\u{1D100}-\u{1D1FF}]/u.test(t)) hasChordOrSymbol = true;
+      continue;
+    }
+    return false;
   }
   return hasChordOrSymbol;
 }
@@ -247,15 +267,40 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// bpm puede venir de datos externos (backup .json importado, o la copia de la nube si
+// llegara a estar manipulada) — nunca se interpola crudo en innerHTML sin pasar por esto.
+function safeBpm(v){
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) && n > 0 && n < 1000 ? n : null;
+}
+
+// Clasifica una línea del cifrado (sección / acordes / letra / vacío) — usado tanto
+// por renderChordChart como por extractSectionLabels, para que la lista de saltos
+// rápidos de Modo En Vivo nunca quede desincronizada de los encabezados renderizados.
+function classifyLine(rawLine){
+  const trimmed = rawLine.trim();
+  const bracket = trimmed.match(/^\[(.+)\]$/);
+  if (bracket) return { type:'section', label: bracket[1] };
+  if (trimmed && SECTION_KEYWORDS_RE.test(trimmed)) return { type:'section', label: trimmed };
+  if (!trimmed) return { type:'spacer' };
+  return { type: isChordLine(rawLine) ? 'chord' : 'lyric' };
+}
+
+function extractSectionLabels(chordsText){
+  if (!chordsText) return [];
+  return chordsText.split('\n')
+    .map((line, i) => ({ line: i, ...classifyLine(line) }))
+    .filter(c => c.type === 'section')
+    .map(c => ({ line: c.line, label: c.label }));
+}
+
 function renderChordChart(chordsText, semitones, targetKey){
   if (!chordsText || !chordsText.trim()) return '';
   return chordsText.split('\n').map(line => {
-    const trimmed = line.trim();
-    const sec = trimmed.match(/^\[(.+)\]$/);
-    if (sec) return `<div class="section-header">${escapeHtml(sec[1])}</div>`;
-    if (trimmed && SECTION_KEYWORDS_RE.test(trimmed)) return `<div class="section-header">${escapeHtml(trimmed)}</div>`;
-    if (!trimmed) return `<div class="spacer">&nbsp;</div>`;
-    if (isChordLine(line)){
+    const c = classifyLine(line);
+    if (c.type === 'section') return `<div class="section-header">${escapeHtml(c.label)}</div>`;
+    if (c.type === 'spacer') return `<div class="spacer">&nbsp;</div>`;
+    if (c.type === 'chord'){
       const html = line.split(/(\s+)/).map(part =>
         /\S/.test(part)
           ? `<span class="chord-tok">${escapeHtml(transposeChord(part, semitones, targetKey))}</span>`
@@ -281,8 +326,18 @@ function loadSongs(){
 }
 function saveSongs(songs){
   localStorage.setItem(STORAGE_KEY, JSON.stringify(songs));
+  markDirty();
   scheduleCloudPush();
 }
+
+// Marca que hay cambios locales que todavía no se confirmaron guardados en la nube.
+// loadInitialData() la consulta para nunca sobreescribir una edición reciente con una
+// copia vieja de la nube si recién se recargó la página antes de que el guardado
+// automático (debounce de 1.5s) terminara.
+const DIRTY_SONGS_KEY = 'mark_chords_dirty_since';
+function markDirty(){ if (!localStorage.getItem(DIRTY_SONGS_KEY)) localStorage.setItem(DIRTY_SONGS_KEY, String(Date.now())); }
+function clearDirty(){ localStorage.removeItem(DIRTY_SONGS_KEY); }
+function isDirty(){ return !!localStorage.getItem(DIRTY_SONGS_KEY); }
 
 /* ============================================================
    GUARDADO EN LA NUBE (repositorio de GitHub)
@@ -304,12 +359,39 @@ function setGithubToken(token){
   else localStorage.removeItem(GITHUB_TOKEN_KEY);
 }
 
+// Normaliza un objeto de canción que viene de una fuente NO confiable (la copia de la
+// nube o un backup .json importado por el usuario) a los tipos esperados, para que
+// nunca llegue algo con forma inesperada (o intencionalmente maliciosa) a innerHTML.
+// Descarta entradas sin título usable.
+function coerceSong(raw){
+  if (!raw || typeof raw !== 'object') return null;
+  const str = (v) => typeof v === 'string' ? v : (v == null ? '' : String(v));
+  const title = str(raw.title).trim();
+  if (!title) return null;
+  return {
+    id: str(raw.id) || stableSongId(title, str(raw.artist)),
+    title,
+    artist: str(raw.artist),
+    key: str(raw.key) || 'C',
+    originalKey: str(raw.originalKey),
+    bpm: safeBpm(raw.bpm),
+    youtube: str(raw.youtube),
+    mp3: str(raw.mp3),
+    sheetMusic: str(raw.sheetMusic),
+    sequence: Array.isArray(raw.sequence) ? raw.sequence.filter(x => typeof x === 'string') : [],
+    annotations: str(raw.annotations),
+    chords: str(raw.chords),
+    favorite: raw.favorite === true,
+  };
+}
+
 async function loadSongsFromCloud(){
   try {
     const res = await fetch(`https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${GITHUB_DATA_PATH}?_=${Date.now()}`);
     if (!res.ok) return null;
     const data = await res.json();
-    return Array.isArray(data) ? data : null;
+    if (!Array.isArray(data)) return null;
+    return data.map(coerceSong).filter(Boolean);
   } catch(e){ return null; }
 }
 
@@ -331,7 +413,12 @@ async function runCloudPush(){
   if (cloudPushInFlight){ cloudPushPending = true; return; }
   cloudPushInFlight = true;
   try {
-    await pushSongsToCloud();
+    const sentJson = await pushSongsToCloud();
+    // Solo se limpia "dirty" si lo que hay AHORA en memoria es exactamente lo que se
+    // subió — si una edición llegó mientras el PUT estaba en curso, se queda marcado
+    // como pendiente y el próximo ciclo de guardado (ya encolado por scheduleCloudPush
+    // o por cloudPushPending) lo termina de subir.
+    if (JSON.stringify(state.songs, null, 2) === sentJson) clearDirty();
     showToast('Guardado en la nube ✓', 'success');
   } catch(err){
     showToast('No se guardó en la nube: ' + err.message, 'error');
@@ -360,8 +447,10 @@ async function pushSongsToCloud(){
     throw new Error(body?.message || `código ${res.status} al verificar el archivo. Revisa que la llave tenga permiso de escritura sobre este repositorio.`);
   }
 
+  let sentJson;
   async function putContent(sha){
-    const content = btoa(unescape(encodeURIComponent(JSON.stringify(state.songs, null, 2))));
+    sentJson = JSON.stringify(state.songs, null, 2); // capturado justo antes de enviar
+    const content = btoa(unescape(encodeURIComponent(sentJson)));
     return fetch(apiUrl, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
@@ -389,6 +478,122 @@ async function pushSongsToCloud(){
     const errBody = await safeJson(putRes);
     throw new Error(errBody?.message || `código ${putRes.status}`);
   }
+  return sentJson;
+}
+
+/* ============================================================
+   SETLIST DEL DOMINGO (archivo independiente en la nube)
+   ============================================================
+   Se guarda como un archivo separado (data/setlist.json, solo un array de IDs) en vez
+   de meterlo dentro de data/songs.json — así nunca se toca la forma del archivo real
+   de canciones que ya está en producción con datos de Mark. El pipeline es una copia
+   deliberada del de canciones (no una versión compartida/genérica) para no arriesgar
+   ese código ya probado en uso real.
+   ============================================================ */
+const GITHUB_SETLIST_PATH = 'data/setlist.json';
+const SETLIST_STORAGE_KEY = 'mark_chords_setlist';
+const SETLIST_DIRTY_KEY = 'mark_chords_setlist_dirty_since';
+
+function loadSetlist(){
+  const raw = localStorage.getItem(SETLIST_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter(x => typeof x === 'string') : [];
+  } catch(e){ return []; }
+}
+function markSetlistDirty(){ if (!localStorage.getItem(SETLIST_DIRTY_KEY)) localStorage.setItem(SETLIST_DIRTY_KEY, String(Date.now())); }
+function clearSetlistDirty(){ localStorage.removeItem(SETLIST_DIRTY_KEY); }
+function isSetlistDirty(){ return !!localStorage.getItem(SETLIST_DIRTY_KEY); }
+
+function saveSetlist(ids){
+  state.setlist = ids;
+  localStorage.setItem(SETLIST_STORAGE_KEY, JSON.stringify(ids));
+  markSetlistDirty();
+  scheduleSetlistCloudPush();
+}
+
+async function loadSetlistFromCloud(){
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${GITHUB_SETLIST_PATH}?_=${Date.now()}`);
+    if (!res.ok) return null; // incluye el 404 esperado antes de que el archivo exista
+    const data = await res.json();
+    return Array.isArray(data) ? data.filter(x => typeof x === 'string') : null;
+  } catch(e){ return null; }
+}
+
+let setlistPushTimer = null;
+let setlistPushInFlight = false;
+let setlistPushPending = false;
+
+function scheduleSetlistCloudPush(){
+  if (!getGithubToken()) return;
+  clearTimeout(setlistPushTimer);
+  setlistPushTimer = setTimeout(runSetlistCloudPush, 1500);
+}
+
+async function runSetlistCloudPush(){
+  if (setlistPushInFlight){ setlistPushPending = true; return; }
+  setlistPushInFlight = true;
+  try {
+    const sentJson = await pushSetlistToCloud();
+    if (JSON.stringify(state.setlist, null, 2) === sentJson) clearSetlistDirty();
+  } catch(err){
+    showToast('No se guardó el setlist en la nube: ' + err.message, 'error');
+  } finally {
+    setlistPushInFlight = false;
+    if (setlistPushPending){ setlistPushPending = false; runSetlistCloudPush(); }
+  }
+}
+
+async function pushSetlistToCloud(){
+  const token = getGithubToken();
+  if (!token) throw new Error('No hay llave de acceso configurada.');
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_SETLIST_PATH}`;
+
+  async function getSha(){
+    const res = await fetch(`${apiUrl}?ref=${GITHUB_BRANCH}&_=${Date.now()}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (res.ok) return (await safeJson(res))?.sha || null;
+    if (res.status === 404) return null;
+    const body = await safeJson(res);
+    throw new Error(body?.message || `código ${res.status} al verificar el archivo del setlist.`);
+  }
+
+  let sentJson;
+  async function putContent(sha){
+    sentJson = JSON.stringify(state.setlist, null, 2);
+    const content = btoa(unescape(encodeURIComponent(sentJson)));
+    return fetch(apiUrl, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `Actualizar orden del set (${new Date().toLocaleString('es-CO')})`,
+        content,
+        branch: GITHUB_BRANCH,
+        ...(sha ? { sha } : {}),
+      }),
+    });
+  }
+
+  let sha = await getSha();
+  let putRes = await putContent(sha);
+  if (putRes.status === 409){
+    sha = await getSha();
+    putRes = await putContent(sha);
+  }
+  if (!putRes.ok){
+    const errBody = await safeJson(putRes);
+    throw new Error(errBody?.message || `código ${putRes.status}`);
+  }
+  return sentJson;
+}
+
+function toggleInSetlist(id){
+  const idx = state.setlist.indexOf(id);
+  saveSetlist(idx === -1 ? [...state.setlist, id] : state.setlist.filter(x => x !== id));
+  renderLibrary();
 }
 
 function slugify(s){
@@ -438,6 +643,8 @@ const state = {
   mobileView: 'library', // 'library' | 'detail' — solo controla el layout en pantallas angostas
   detailFontSize: parseInt(localStorage.getItem(DETAIL_FONT_KEY), 10) || 17,
   autoScroll: { active:false, rafId:null, lastTs:null },
+  setlist: loadSetlist(), // orden de canciones del set de hoy (IDs)
+  stageSequenceIds: [], // secuencia de navegación siguiente/anterior activa en Modo En Vivo
 };
 
 // A tamaño lg+ la biblioteca (sidebar) y el detalle (main) se muestran siempre
@@ -475,6 +682,17 @@ document.getElementById('keyFilterSelect').onchange = (e) => { state.keyFilter =
 /* ============================================================
    LIBRARY (SIDEBAR)
    ============================================================ */
+// Misma lista filtrada/ordenada que se ve en la biblioteca (búsqueda + filtro de tono +
+// favoritos primero) — se reutiliza tal cual para la navegación siguiente/anterior de
+// Modo En Vivo cuando no hay un setlist activo, en vez de duplicar esta lógica.
+function getVisibleLibraryList(){
+  const q = state.search.trim().toLowerCase();
+  let list = state.songs;
+  if (q) list = list.filter(s => (s.title||'').toLowerCase().includes(q) || (s.artist||'').toLowerCase().includes(q));
+  if (state.keyFilter) list = list.filter(s => s.key === state.keyFilter);
+  return [...list].sort((a,b) => (b.favorite?1:0) - (a.favorite?1:0));
+}
+
 function renderLibrary(){
   const listEl = document.getElementById('songList');
   const emptyEl = document.getElementById('libraryEmpty');
@@ -500,11 +718,7 @@ function renderLibrary(){
   emptyEl.classList.remove('flex');
   listEl.classList.remove('hidden');
 
-  const q = state.search.trim().toLowerCase();
-  let list = state.songs;
-  if (q) list = list.filter(s => (s.title||'').toLowerCase().includes(q) || (s.artist||'').toLowerCase().includes(q));
-  if (state.keyFilter) list = list.filter(s => s.key === state.keyFilter);
-  list = [...list].sort((a,b) => (b.favorite?1:0) - (a.favorite?1:0));
+  const list = getVisibleLibraryList();
 
   if (list.length === 0){
     listEl.innerHTML = '';
@@ -515,12 +729,13 @@ function renderLibrary(){
 
   listEl.innerHTML = list.map(s => {
     const active = s.id === state.currentSongId;
+    const inSetlist = state.setlist.includes(s.id);
     const keyOk = looksLikeKey(s.key);
     const keyBadge = keyOk
       ? `<span class="shrink-0 max-w-[92px] truncate text-right text-[10px] font-mono font-bold text-orange-400 bg-orange-500/10 rounded px-1.5 py-0.5 leading-tight">${escapeHtml(s.key)}</span>`
       : `<span class="shrink-0 text-right text-[10px] font-bold text-neutral-600 bg-neutral-800 rounded px-1.5 py-0.5 leading-tight" title="${escapeHtml(s.key||'')}"><i class="fa-solid fa-circle-question"></i></span>`;
     return `
-    <button onclick="openSong('${s.id}')" class="fade-in w-full text-left px-3 py-2.5 rounded-lg mb-1 transition-colors border ${active ? 'bg-orange-500/10 border-orange-500/40' : 'border-transparent hover:bg-neutral-900'}">
+    <div onclick="openSong('${s.id}')" tabindex="0" role="button" class="fade-in w-full text-left px-3 py-2.5 rounded-lg mb-1 transition-colors border cursor-pointer ${active ? 'bg-orange-500/10 border-orange-500/40' : 'border-transparent hover:bg-neutral-900'}">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <div class="font-semibold text-sm truncate flex items-center gap-1.5 text-white">
@@ -529,14 +744,17 @@ function renderLibrary(){
           </div>
           <div class="text-xs text-neutral-500 truncate">${escapeHtml(s.artist || '—')}</div>
         </div>
-        ${keyBadge}
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button onclick="event.stopPropagation(); toggleInSetlist('${s.id}')" title="${inSetlist ? 'Quitar del setlist de hoy' : 'Agregar al setlist de hoy'}" class="w-6 h-6 rounded flex items-center justify-center ${inSetlist ? 'text-orange-400' : 'text-neutral-600 hover:text-neutral-400'}"><i class="fa-solid ${inSetlist ? 'fa-calendar-check' : 'fa-calendar-plus'} text-xs"></i></button>
+          ${keyBadge}
+        </div>
       </div>
       <div class="flex items-center gap-2 mt-1.5 text-[11px] text-neutral-600">
-        ${s.bpm ? `<span><i class="fa-solid fa-gauge-high"></i> ${s.bpm}</span>` : ''}
+        ${safeBpm(s.bpm) ? `<span><i class="fa-solid fa-gauge-high"></i> ${safeBpm(s.bpm)}</span>` : ''}
         ${s.mp3 ? `<span><i class="fa-solid fa-headphones"></i></span>` : ''}
         ${s.youtube ? `<span><i class="fa-brands fa-youtube"></i></span>` : ''}
       </div>
-    </button>`;
+    </div>`;
   }).join('');
 }
 
@@ -560,7 +778,7 @@ function openSong(id){
 // acordes del cifrado, así que reusarlo aquí mantiene "Tono actual" sincronizado
 // con lo que realmente se transporta en el cifrado.
 function parseKeyRoot(keyStr){
-  const m = CHORD_TOKEN_REGEX.exec(String(keyStr||'').trim());
+  const m = CHORD_TOKEN_REGEX.exec(normalizeChordUnicode(String(keyStr||'').trim()));
   if (!m || m[1]) return null;
   return m[2] + (m[3]||'');
 }
@@ -569,7 +787,15 @@ function parseKeyRoot(keyStr){
 // distingue un tono real ("D", "C#m") de ese tipo de texto para no mostrarlo como
 // si fuera un tono editable/transportable.
 function looksLikeKey(keyStr){
-  return CHORD_TOKEN_REGEX.test(String(keyStr||'').trim());
+  return CHORD_TOKEN_REGEX.test(normalizeChordUnicode(String(keyStr||'').trim()));
+}
+// El <select> de tono destino solo lista los 12 tonos mayores de KEY_OPTIONS (siempre
+// en bemol). Un tono con calidad ("Am") o deletreado con sostenido ("C#") no calza con
+// ninguna <option> tal cual, dejando el selector visualmente vacío. Esto normaliza solo
+// la raíz (ignora la calidad) a la misma convención de bemoles que usa KEY_OPTIONS.
+function keyRootForSelect(fullKeyStr){
+  const root = parseKeyRoot(fullKeyStr);
+  return root ? transposeNote(root, 0, /*useFlats*/ true) : null;
 }
 function currentTargetKey(){
   const s = getSong(state.currentSongId);
@@ -612,7 +838,7 @@ function renderMain(){
   const sheetMusicIsUrl = /^https?:\/\//i.test(s.sheetMusic || '');
   const meta = document.getElementById('dMeta');
   meta.innerHTML = [
-    s.bpm ? `<span class="text-xs bg-neutral-800 rounded-full px-2.5 py-1 text-neutral-300"><i class="fa-solid fa-gauge-high mr-1"></i>${s.bpm} BPM</span>` : '',
+    safeBpm(s.bpm) ? `<span class="text-xs bg-neutral-800 rounded-full px-2.5 py-1 text-neutral-300"><i class="fa-solid fa-gauge-high mr-1"></i>${safeBpm(s.bpm)} BPM</span>` : '',
     s.originalKey ? `<span class="text-xs bg-neutral-800 rounded-full px-2.5 py-1 text-neutral-300">Tono original: ${escapeHtml(s.originalKey)}</span>` : '',
     !keyIsValid
       ? (s.key ? `<span class="text-xs bg-neutral-800 rounded-full px-2.5 py-1 text-neutral-500 max-w-[220px] truncate inline-block align-bottom" title="${escapeHtml(s.key)}"><i class="fa-solid fa-circle-question mr-1"></i>Tono sin definir (celda: "${escapeHtml(s.key)}")</span>` : `<span class="text-xs bg-neutral-800 rounded-full px-2.5 py-1 text-neutral-500">Tono sin definir</span>`)
@@ -637,7 +863,11 @@ function renderMain(){
 
   const sel = document.getElementById('dTargetKey');
   sel.innerHTML = KEY_OPTIONS.map(k => `<option value="${k}">${k}</option>`).join('');
-  sel.value = currentTargetKey();
+  // currentTargetKey() puede traer calidad ("Am") o venir deletreado con sostenidos,
+  // ninguno de los cuales existe como <option> en KEY_OPTIONS (solo mayores en bemol).
+  // Se normaliza solo la raíz para que el selector siempre tenga una opción marcada,
+  // aunque la etiqueta grande "Tono actual" siga mostrando el valor completo ("Am").
+  sel.value = keyRootForSelect(currentTargetKey()) || currentTargetKey();
   sel.onchange = () => {
     const s2 = getSong(state.currentSongId);
     const origRoot = parseKeyRoot(s2.key);
@@ -791,7 +1021,13 @@ function renderYoutubeArea(s){
   if (!s.youtube) return `<p class="text-sm text-neutral-600">Sin video de referencia.</p>`;
   const id = extractYouTubeId(s.youtube);
   if (!id){
-    return `<a href="${escapeHtml(s.youtube)}" target="_blank" class="text-orange-400 text-sm underline flex items-center gap-2"><i class="fa-brands fa-youtube"></i> Abrir en YouTube ↗</a>`;
+    // s.youtube puede venir de una celda de Excel/Sheet editada por un tercero — sin este
+    // filtro de esquema, un valor "javascript:..." se renderizaría como link clickeable
+    // capaz de ejecutar código en la página (y robar la llave de GitHub de localStorage).
+    if (/^https?:\/\//i.test(s.youtube)){
+      return `<a href="${escapeHtml(s.youtube)}" target="_blank" rel="noopener noreferrer" class="text-orange-400 text-sm underline flex items-center gap-2"><i class="fa-brands fa-youtube"></i> Abrir en YouTube ↗</a>`;
+    }
+    return `<p class="text-sm text-neutral-500 break-words">${escapeHtml(s.youtube)}</p>`;
   }
   return `<div id="ytFacade" class="relative rounded-lg overflow-hidden cursor-pointer group aspect-video bg-black" onclick="loadYoutubeIframe('${id}')">
       <img src="https://img.youtube.com/vi/${id}/hqdefault.jpg" class="w-full h-full object-cover" alt="Miniatura de YouTube">
@@ -807,18 +1043,87 @@ function loadYoutubeIframe(id){
 /* ============================================================
    STAGE MODE
    ============================================================ */
+// Determina el orden de navegación siguiente/anterior: si el setlist de hoy no está
+// vacío y contiene la canción actual, se navega en el orden del setlist; si no, se
+// navega en la lista de la biblioteca tal como está filtrada/buscada en pantalla.
+// Así abrir una canción que no está en el setlist de hoy sigue navegando la biblioteca
+// con normalidad en vez de quedar atado a un setlist que no la incluye.
+function getStageSequenceIds(){
+  const s = getSong(state.currentSongId);
+  if (s && state.setlist.length && state.setlist.includes(s.id)){
+    return state.setlist.filter(id => getSong(id)); // descarta ids huérfanos (canción borrada)
+  }
+  return getVisibleLibraryList().map(x => x.id);
+}
+
 function enterStageMode(){
   const s = getSong(state.currentSongId);
   if (!s) return;
+  state.stageSequenceIds = getStageSequenceIds();
+  renderStageSong(s);
+  showView('stage');
+}
+function exitStageMode(){ showView('detail'); }
+
+function renderStageSong(s){
+  stopAutoScroll();
   document.getElementById('sTitle').textContent = s.title || 'Sin título';
-  document.getElementById('sSubtitle').textContent = `${s.artist||''} · Tono ${currentTargetKey()}`;
+  const ids = state.stageSequenceIds || [];
+  const pos = ids.indexOf(s.id);
+  const posLabel = (pos !== -1 && ids.length > 1) ? ` · ${pos+1}/${ids.length}` : '';
+  document.getElementById('sSubtitle').textContent = `${s.artist||''} · Tono ${currentTargetKey()}${posLabel}`;
   document.getElementById('sChart').innerHTML = renderChordChart(s.chords, state.transposeSemitones, currentTargetKey()) || `<p class="text-neutral-600 text-center mt-10">Sin cifrado.</p>`;
   const savedFont = localStorage.getItem(STAGE_FONT_KEY);
   document.documentElement.style.setProperty('--stage-font', (savedFont ? savedFont : 32) + 'px');
   document.getElementById('stageScrollArea').scrollTop = 0;
-  showView('stage');
+  document.querySelectorAll('.stage-nav-btn').forEach(b => b.classList.toggle('invisible', ids.length < 2));
+
+  const sections = extractSectionLabels(s.chords);
+  const jumpSel = document.getElementById('sSectionJump');
+  jumpSel.classList.toggle('hidden', sections.length === 0);
+  jumpSel.innerHTML = `<option value="">Ir a sección...</option>` +
+    sections.map((sec, i) => `<option value="${i}">${escapeHtml(sec.label)}</option>`).join('');
+  jumpSel.selectedIndex = 0;
 }
-function exitStageMode(){ showView('detail'); }
+
+function stageGoTo(delta){
+  const ids = state.stageSequenceIds || [];
+  if (ids.length < 2) return;
+  const curIdx = ids.indexOf(state.currentSongId);
+  if (curIdx === -1) return;
+  const nextId = ids[((curIdx + delta) % ids.length + ids.length) % ids.length]; // wrap-around
+  const nextSong = getSong(nextId);
+  if (!nextSong) return;
+  state.currentSongId = nextId;
+  state.transposeSemitones = 0;
+  state.targetKeyStr = nextSong.key;
+  renderStageSong(nextSong);
+  renderLibrary(); // mantiene resaltada la canción correcta al salir de Modo En Vivo
+}
+function stageNext(){ stageGoTo(1); }
+function stagePrev(){ stageGoTo(-1); }
+
+// Flechas del teclado para navegar mientras Modo En Vivo está abierto — útil con un
+// pedal Bluetooth de cambio de página conectado como teclado.
+document.addEventListener('keydown', (e) => {
+  if (document.getElementById('view-stage').classList.contains('hidden')) return;
+  if (e.key === 'ArrowRight') stageNext();
+  else if (e.key === 'ArrowLeft') stagePrev();
+});
+
+// Tocar un encabezado de sección salta ahí — listener delegado sobre el contenedor
+// (Modo En Vivo nunca se destruye, solo se oculta, así que basta registrarlo una vez).
+document.getElementById('stageScrollArea').addEventListener('click', (e) => {
+  const header = e.target.closest('.section-header');
+  if (header) header.scrollIntoView({ behavior:'smooth', block:'start' });
+});
+document.getElementById('sSectionJump').addEventListener('change', (e) => {
+  const idx = parseInt(e.target.value, 10);
+  e.target.selectedIndex = 0;
+  if (Number.isNaN(idx)) return;
+  const headers = document.querySelectorAll('#sChart .section-header');
+  if (headers[idx]) headers[idx].scrollIntoView({ behavior:'smooth', block:'start' });
+});
 
 function stageFontStep(delta){
   const cur = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--stage-font')) || 32;
@@ -953,6 +1258,60 @@ async function handleSaveGithubToken(){
     statusEl.innerHTML = `<span class="text-red-400">${escapeHtml(err.message)}</span>`;
     btn.disabled = false;
   }
+}
+
+/* ---------- Setlist de hoy ---------- */
+function openSetlistModal(){
+  const songs = state.setlist.map(id => getSong(id)).filter(Boolean);
+  // limpieza defensiva: si una canción del setlist fue borrada, se cae del setlist guardado
+  if (songs.length !== state.setlist.length) saveSetlist(songs.map(s => s.id));
+
+  openModal(`
+    <div class="p-5">
+      <h2 class="text-lg font-bold mb-1 text-white">Setlist de hoy</h2>
+      <p class="text-sm text-neutral-500 mb-4">Arma el orden de canciones para el servicio. Modo En Vivo navega en este orden cuando lo empiezas desde aquí.</p>
+      <div id="setlistItems" class="space-y-1.5 max-h-[50vh] overflow-y-auto">
+        ${songs.length ? songs.map((s, i) => `
+          <div class="flex items-center gap-2 bg-neutral-800 rounded-lg px-3 py-2">
+            <span class="text-xs text-neutral-500 w-5 shrink-0">${i+1}</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-sm font-semibold text-white truncate">${escapeHtml(s.title||'Sin título')}</div>
+              <div class="text-xs text-neutral-500 truncate">${escapeHtml(s.artist||'—')}</div>
+            </div>
+            <button onclick="moveSetlistItem(${i}, -1)" ${i===0?'disabled':''} class="w-7 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-orange-400 disabled:opacity-20 disabled:pointer-events-none"><i class="fa-solid fa-chevron-up text-xs"></i></button>
+            <button onclick="moveSetlistItem(${i}, 1)" ${i===songs.length-1?'disabled':''} class="w-7 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-orange-400 disabled:opacity-20 disabled:pointer-events-none"><i class="fa-solid fa-chevron-down text-xs"></i></button>
+            <button onclick="removeFromSetlist('${s.id}')" class="w-7 h-7 rounded flex items-center justify-center text-neutral-500 hover:text-red-400"><i class="fa-solid fa-xmark text-xs"></i></button>
+          </div>
+        `).join('') : `<p class="text-sm text-neutral-600 text-center py-6">Vacío — toca <i class="fa-solid fa-calendar-plus"></i> junto a una canción en la biblioteca para agregarla aquí.</p>`}
+      </div>
+      <div class="flex gap-2 mt-4">
+        <button onclick="closeModal()" class="flex-1 py-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold">Cerrar</button>
+        <button onclick="startLiveSetlist()" ${songs.length?'':'disabled'} class="flex-1 py-2.5 rounded-lg bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold disabled:opacity-30 disabled:pointer-events-none">Empezar Modo En Vivo</button>
+      </div>
+    </div>
+  `, { wide:true });
+}
+function moveSetlistItem(index, delta){
+  const ids = [...state.setlist];
+  const j = index + delta;
+  if (j < 0 || j >= ids.length) return;
+  [ids[index], ids[j]] = [ids[j], ids[index]];
+  saveSetlist(ids);
+  openSetlistModal();
+}
+function removeFromSetlist(id){
+  saveSetlist(state.setlist.filter(x => x !== id));
+  openSetlistModal();
+}
+function startLiveSetlist(){
+  if (!state.setlist.length) return;
+  const first = getSong(state.setlist[0]);
+  if (!first) return;
+  state.currentSongId = first.id;
+  state.transposeSemitones = 0;
+  state.targetKeyStr = first.key;
+  closeModal();
+  enterStageMode(); // detecta que la canción está en el setlist y navega en ese orden (D1)
 }
 
 /* ---------- Alta / edición manual ---------- */
@@ -1428,8 +1787,9 @@ function openImportBackupModal(){
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const songs = JSON.parse(ev.target.result);
-        if (!Array.isArray(songs)) throw new Error('Formato inválido.');
+        const raw = JSON.parse(ev.target.result);
+        if (!Array.isArray(raw)) throw new Error('Formato inválido.');
+        const songs = raw.map(coerceSong).filter(Boolean);
         showImportPreview(songs, 'backup .json');
       } catch(err){
         openModal(`<div class="p-5"><p class="text-sm text-red-400">No se pudo leer el backup: ${escapeHtml(err.message)}</p><button onclick="closeModal()" class="w-full mt-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm">Cerrar</button></div>`);
@@ -1451,19 +1811,53 @@ async function loadInitialData(){
   const icon = document.getElementById('syncIcon');
   if (icon) icon.classList.add('fa-spin');
   try {
-    const cloud = await loadSongsFromCloud();
+    const [cloud, cloudSetlist] = await Promise.all([loadSongsFromCloud(), loadSetlistFromCloud()]);
     if (cloud){
-      state.songs = cloud;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(cloud)); // cache local; no dispara push de vuelta
-      renderLibrary();
-      renderMain();
+      if (isDirty()){
+        // Hay una edición local que todavía no se confirmó guardada en la nube (por
+        // ejemplo, se recargó la página antes de que pasara el debounce de 1.5s, o el
+        // guardado anterior falló). Adoptar la copia de la nube ahora la borraría en
+        // silencio — se conserva la local y se reintenta subirla en su lugar.
+        showToast('Tienes cambios sin guardar en la nube — reintentando...', 'info');
+        runCloudPush();
+      } else {
+        state.songs = cloud;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cloud)); // cache local; no dispara push de vuelta
+      }
     }
+    if (cloudSetlist){
+      if (isSetlistDirty()){
+        runSetlistCloudPush();
+      } else {
+        state.setlist = cloudSetlist;
+        localStorage.setItem(SETLIST_STORAGE_KEY, JSON.stringify(cloudSetlist));
+      }
+    }
+    renderLibrary();
+    renderMain();
   } catch(err){
     console.warn('No se pudo cargar el repertorio de la nube (se sigue mostrando el local):', err.message);
   } finally {
     if (icon) icon.classList.remove('fa-spin');
   }
 }
+
+// Si un guardado quedó pendiente por falta de conexión, se reintenta solo apenas
+// vuelva internet — sin esto, solo se reintentaba si el usuario volvía a editar algo.
+window.addEventListener('online', () => {
+  if (!getGithubToken()) return;
+  if (isDirty()) runCloudPush();
+  if (isSetlistDirty()) runSetlistCloudPush();
+});
+
+// Aviso de "hay cambios sin guardar" si se cierra/recarga la pestaña justo cuando un
+// guardado está en curso o quedó pendiente — reduce el riesgo de perder una edición.
+window.addEventListener('beforeunload', (e) => {
+  if (cloudPushInFlight || isDirty() || setlistPushInFlight || isSetlistDirty()){
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 /* ============================================================
    INIT
